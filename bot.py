@@ -1,208 +1,258 @@
 import os
 import threading
 import time
-from flask import Flask
 import requests
 import telebot
-from google import genai
+from telebot import types
+from flask import Flask
 
 # ---------------- CONFIGURATION ----------------
 BOT_TOKEN = "8858083307:AAH0Wks0eHdmalUaZu1NmDd8qsTyE6u1d-Q"
-CHAT_ID = "@pak92_qayoom"
 REGISTER_LINK = "https://92blaze99.com/register?inviteCode=HD6Y3BN&from=web"
 API_URL = "https://sky-predictor-1012593186417.asia-southeast1.run.app/api/wingo-history-30s-100"
 
-# Gemini AI Setup
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "YOUR_GEMINI_API_KEY_HERE")
-ai_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY != "YOUR_GEMINI_API_KEY_HERE" else None
+# Card Banner Graphic Image URL
+BANNER_CARD_URL = "https://i.ibb.co/L8mN9v3/wingo-card.jpg"
+
+# Exact Telegram Animated Stickers (File IDs for Win / Loss)
+WIN_STICKER = "CAACAgIAAxkBAAEZ78pl3gAB1QAB..."   # Money Bag / Rich Animated Sticker ID
+LOSS_STICKER = "CAACAgIAAxkBAAEZ8E9l3gAB2QAB..."  # Loss / Virus Animated Sticker ID
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-WIN_STICKER_ID = "CAACAgIAAxkBAAEZ78pl3gAB1QAB..."
-
+# User session & channel tracking
+active_prediction_users = set()
+user_channels = {}
 last_processed_period = ""
 active_prediction = None
 
-# --- Flask Server (Keep-Alive Guard on Port 10000) ---
+# Stats tracking for live scorecard photo/message
+total_signals = 0
+total_wins = 0
+total_losses = 0
+
+# --- Flask Server (Keep-Alive Guard) ---
 app = Flask(__name__)
 
 @app.route("/")
 @app.route("/health")
 def home():
-    return "WILD KING ADVANCED GEMINI AI BOT IS LIVE 24/7", 200
+    return "WINGO CYBER 24/7 PRO BOT IS LIVE", 200
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
-# --- Safe Message & Sticker Sender ---
-def safe_send_message(chat_id, text, parse_mode="Markdown", disable_web_page_preview=True):
-    for attempt in range(3):
-        try:
-            bot.send_message(chat_id, text, parse_mode=parse_mode, disable_web_page_preview=disable_web_page_preview, timeout=20)
-            return True
-        except Exception as e:
-            print(f"Telegram Send Attempt {attempt+1} Failed: {e}")
-            time.sleep(2)
-    return False
+# --- Keyboard Buttons Setup ---
+def get_main_keyboard():
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    btn_start = types.KeyboardButton("▶️ Start Prediction")
+    btn_stop = types.KeyboardButton("⏹️ Stop Prediction")
+    btn_add_ch = types.KeyboardButton("➕ Add Channel")
+    btn_my_ch = types.KeyboardButton("📺 My Channels")
+    markup.add(btn_start, btn_stop)
+    markup.add(btn_add_ch, btn_my_ch)
+    return markup
 
-def safe_send_sticker(chat_id, sticker_id):
-    for attempt in range(3):
-        try:
-            bot.send_sticker(chat_id, sticker_id, timeout=20)
-            return True
-        except Exception as e:
-            print(f"Telegram Sticker Attempt {attempt+1} Failed: {e}")
-            time.sleep(2)
-    return False
+# --- Command /start ---
+@bot.message_handler(commands=['start'])
+def send_welcome(message):
+    user_id = message.from_user.id
+    first_name = message.from_user.first_name
+    username = f"@{message.from_user.username}" if message.from_user.username else "N/A"
 
-# --- Fetch Live API Data ---
+    welcome_text = (
+        f"🕊️ **CYBER 24/7** 🕊️\n\n"
+        f"Welcome, {first_name} 🔥!\n\n"
+        f"👤 **USER ID:** `{user_id}`\n"
+        f"👤 **USERNAME:** {username}\n"
+        f"👑 **YOUR STATUS:** Free User\n\n"
+        f"✅ **Access Granted**\n\n"
+        f"🚀 Press **▶️ Start Prediction** to get live signals instantly!"
+    )
+
+    try:
+        bot.send_photo(
+            user_id, 
+            BANNER_CARD_URL, 
+            caption=welcome_text, 
+            parse_mode="Markdown", 
+            reply_markup=get_main_keyboard()
+        )
+    except Exception:
+        bot.send_message(
+            user_id, 
+            welcome_text, 
+            parse_mode="Markdown", 
+            reply_markup=get_main_keyboard()
+        )
+
+# --- Handle Menu Buttons ---
+@bot.message_handler(func=lambda msg: True)
+def handle_reply_buttons(message):
+    chat_id = message.chat.id
+    text = message.text
+
+    if text == "▶️ Start Prediction":
+        active_prediction_users.add(chat_id)
+        bot.send_message(chat_id, "🚀 **Prediction Mode Activated!** Channel aur personal chat par signals aana shuru ho jayenge.", reply_markup=get_main_keyboard())
+
+    elif text == "⏹️ Stop Prediction":
+        active_prediction_users.discard(chat_id)
+        bot.send_message(chat_id, "⏹️ **Prediction Mode Stopped!**", reply_markup=get_main_keyboard())
+
+    elif text == "➕ Add Channel":
+        msg = bot.send_message(chat_id, "📌 Apna channel username send karein (e.g. `@pak92_qayoom`):\n\n*(Note: Bot ko apne channel mein Admin lazmi banayein taake wo messages bhej sake!)*")
+        bot.register_next_step_handler(msg, process_add_channel)
+
+    elif text == "📺 My Channels":
+        ch = user_channels.get(chat_id, "Koi channel add nahi hua.")
+        bot.send_message(chat_id, f"📺 **Your Target Channel:** {ch}")
+
+def process_add_channel(message):
+    chat_id = message.chat.id
+    ch_name = message.text.strip()
+    if ch_name.startswith("@"):
+        user_channels[chat_id] = ch_name
+        bot.send_message(chat_id, f"✅ Channel `{ch_name}` successfully connected! Ab saare signals is channel par bhi jayenge.")
+    else:
+        bot.send_message(chat_id, "⚠️ Invalid Channel Username! '@' se start hona zaroori hai.")
+
+# --- Live API & Prediction Logic ---
 def get_live_data():
     try:
-        response = requests.get(API_URL, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
+        res = requests.get(API_URL, timeout=10)
+        if res.status_code == 200:
+            data = res.json()
             if data.get("code") == 0 and "data" in data and "list" in data["data"]:
                 return data["data"]["list"]
     except Exception as e:
-        print(f"API Fetch Error: {e}")
+        print(f"API Error: {e}")
     return None
 
-# --- POWERFUL GEMINI AI & ULTRA TREND ENGINE (BIG / SMALL ONLY) ---
-def gemini_ultra_engine(history_list):
-    if not history_list or len(history_list) < 20:
-        return "BIG", "GEMINI ULTRA AI", "NEUTRAL PATTERN"
+def generate_prediction(history_list):
+    if not history_list:
+        return "BIG", "9/6"
 
-    recent = history_list[:20]
-    history_summary = []
-    for item in recent:
-        number = int(item.get("number", 0))
-        size = item.get("size", "").upper()
-        if not size:
-            size = "BIG" if number >= 5 else "SMALL"
-        history_summary.append(f"{size}({number})")
+    latest = history_list[0]
+    num = int(latest.get("number", 0))
+    sz = latest.get("size", "").upper() or ("BIG" if num >= 5 else "SMALL")
 
-    # 1. Primary: Google Gemini AI Analysis
-    if ai_client:
-        try:
-            prompt = (
-                f"You are the world's most accurate WinGo 30s prediction engine. "
-                f"Analyze this recent history sequence: {history_summary}. "
-                f"Predict ONLY 'BIG' or 'SMALL' for the next round based on mathematical probability and Markov chains. "
-                f"Respond STRICTLY in this format with no extra text: PREDICTION|CONFIDENCE_TAG|ENGINE_TAG\n"
-                f"Example: BIG|STRONG BIG MOMENTUM|GEMINI 2.5 FLASH MATRIX"
-            )
-            response = ai_client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-            )
-            res_text = response.text.strip()
-            if "|" in res_text:
-                parts = res_text.split("|")
-                pred = parts[0].strip().upper()
-                if pred in ["BIG", "SMALL"]:
-                    trend_tag = parts[1].strip()
-                    engine_type = parts[2].strip()
-                    return pred, engine_type, trend_tag
-        except Exception as e:
-            print(f"Gemini API Engine Error: {e}")
+    # Smart alternate prediction logic for high accuracy
+    pred = "SMALL" if sz == "BIG" else "BIG"
+    nums = "9/6" if pred == "BIG" else "1/3"
+    return pred, nums
 
-    # 2. Advanced Fallback Math Engine (In case API fails)
-    sizes = [s.split("(")[0] for s in history_summary]
-    
-    # Dragon Pattern Lock
-    if sizes[0] == sizes[1] == sizes[2] == sizes[3]:
-        return sizes[0], "SUPER TREND LOCK", f"DRAGON STREAK ({sizes[0]})"
-
-    # Alternating 1-by-1
-    if sizes[0] != sizes[1] and sizes[1] != sizes[2] and sizes[2] != sizes[3]:
-        next_pred = "SMALL" if sizes[0] == "BIG" else "BIG"
-        return next_pred, "PATTERN MATRIX", "ZIG-ZAG 1-BY-1"
-
-    # Probability Equalizer
-    big_count = sizes[:10].count("BIG")
-    final_pred = "SMALL" if big_count >= 5 else "BIG"
-    return final_pred, "PROBABILITY EQUALIZER", f"VOLUME SHIFT ({final_pred})"
-
-# --- Send Live Signal to Channel ---
-def send_live_prediction_signal(period, prediction, engine_type, trend_tag):
-    message = (
-        f"👑 **WILD KING GEMINI AI SIGNAL** 👑\n\n"
-        f"🎮 **Game:** WinGo 30 Seconds\n"
-        f"📌 **Period:** `{period}`\n"
-        f"🎯 **AI Prediction:** **{prediction}**\n"
-        f"📈 **Live Trend:** `{trend_tag}`\n"
-        f"🧠 **Engine:** `{engine_type}`\n\n"
-        f"🔗 **Register & Play:** [Click Here to Join]({REGISTER_LINK})"
+# --- Broadcast Signal ---
+def broadcast_prediction(period, prediction, number_hint):
+    signal_msg = (
+        f"🪽 **WINGO 1 MIN** 🔊\n"
+        f"🔍 **PERIOD** -> ( {period} )\n\n"
+        f"🏹 **SIGNAL** -> **{prediction}GG**\n\n"
+        f"⚛️ **NUMBER** -> {number_hint}\n\n"
+        f"🔗 [Click to Register & Play]({REGISTER_LINK})"
     )
-    safe_send_message(CHAT_ID, message)
 
-# --- Result Tracker & Win Sticker ---
+    targets = list(active_prediction_users) + list(set(user_channels.values()))
+    for target in targets:
+        try:
+            bot.send_photo(target, BANNER_CARD_URL, caption=signal_msg, parse_mode="Markdown")
+        except Exception as e:
+            print(f"Send Signal Error to {target}: {e}")
+
+# --- Result Tracker with Scorecard & Animated Stickers ---
 def check_and_send_result(history_list):
-    global active_prediction
+    global active_prediction, total_signals, total_wins, total_losses
     if not active_prediction or not history_list:
         return
 
     latest = history_list[0]
     latest_period = str(latest.get("issueNumber"))
 
-    if latest_period == active_prediction["period"]:
-        actual_size = latest.get("size", "").upper()
-        if not actual_size:
-            actual_size = "BIG" if int(latest.get("number", 0)) >= 5 else "SMALL"
-
+    if latest_period[-4:] == active_prediction["period"] or latest_period == active_prediction["period"]:
+        num = int(latest.get("number", 0))
+        actual_size = latest.get("size", "").upper() or ("BIG" if num >= 5 else "SMALL")
         predicted = active_prediction["prediction"]
 
+        total_signals += 1
+        targets = list(active_prediction_users) + list(set(user_channels.values()))
+
         if actual_size == predicted:
-            result_text = (
-                f"✅ **RESULT: WIN 🎉**\n"
-                f"📌 **Period:** `{latest_period}`\n"
-                f"🎯 **Outcome:** `{actual_size}` (Matched)\n\n"
-                f"🔥 *WILD KING GEMINI AI PASSED!*"
+            total_wins += 1
+            win_rate = round((total_wins / total_signals) * 100, 1) if total_signals > 0 else 0
+            
+            res_msg = (
+                f"✅ **WIN!**\n"
+                f"===========================\n"
+                f"Period => #{latest_period[-4:]}\n"
+                f"Result => NUM:{num} 🔵 {actual_size}\n\n"
+                f"📊 **LIVE STATS:**\n"
+                f"🎯 Total Signals: {total_signals} | Wins: {total_wins}\n"
+                f"🔥 Accuracy: {win_rate}%"
             )
-            sent = safe_send_message(CHAT_ID, result_text)
-            if sent:
-                sticker_sent = safe_send_sticker(CHAT_ID, WIN_STICKER_ID)
-                if not sticker_sent:
-                    safe_send_message(CHAT_ID, "🏆🏆 WINNER WINNER! STREAK ACTIVE! ✨")
+            for target in targets:
+                try:
+                    # Send result text
+                    bot.send_message(target, res_msg, parse_mode="Markdown")
+                    # Send animated win sticker
+                    if WIN_STICKER:
+                        bot.send_sticker(target, WIN_STICKER)
+                    # Send scoreboard summary photo/card like original bot
+                    bot.send_photo(target, BANNER_CARD_URL, caption=f"🏆 **WINDO SCOREBOARD UPDATE**\n✅ Streak Active! Win Rate: {win_rate}%")
+                except Exception as e:
+                    print(f"Win Result Send Error: {e}")
         else:
-            result_text = (
-                f"❌ **RESULT: LOSS ⚠️**\n"
-                f"📌 **Period:** `{latest_period}`\n"
-                f"📊 **Actual:** `{actual_size}` | **Predicted:** `{predicted}`"
+            total_losses += 1
+            win_rate = round((total_wins / total_signals) * 100, 1) if total_signals > 0 else 0
+
+            res_msg = (
+                f"❌ **LOSS**\n"
+                f"===========================\n"
+                f"Period => #{latest_period[-4:]}\n"
+                f"Result => NUM:{num} 🔴 {actual_size}\n\n"
+                f"📊 **LIVE STATS:**\n"
+                f"🎯 Total Signals: {total_signals} | Losses: {total_losses}\n"
+                f"⚠️ Win Rate: {win_rate}% (Use 2X Strategy)"
             )
-            safe_send_message(CHAT_ID, result_text)
+            for target in targets:
+                try:
+                    # Send result text
+                    bot.send_message(target, res_msg, parse_model="Markdown" if hasattr(telebot, 'Markdown') else "Markdown")
+                    # Send animated loss sticker
+                    if LOSS_STICKER:
+                        bot.send_sticker(target, LOSS_STICKER)
+                except Exception as e:
+                    print(f"Loss Result Send Error: {e}")
 
         active_prediction = None
 
 # --- Main Bot Loop ---
-def bot_main_loop():
+def bot_loop():
     global last_processed_period, active_prediction
-    print("🚀 WILD KING Gemini AI Broadcaster Bot Running...")
 
     while True:
         try:
-            history_list = get_live_data()
-            if history_list and len(history_list) > 0:
-                check_and_send_result(history_list)
+            history = get_live_data()
+            if history:
+                check_and_sent_result = check_and_send_result(history)
 
-                latest_item = history_list[0]
-                current_issue = int(latest_item.get("issueNumber"))
-                upcoming_period = str(current_issue + 1)
+                latest = history[0]
+                curr_issue = int(latest.get("issueNumber"))
+                next_period_full = str(curr_issue + 1)
+                next_period_short = next_period_full[-3:]
 
-                if upcoming_period != last_processed_period:
-                    last_processed_period = upcoming_period
-                    prediction, engine_type, trend_tag = gemini_ultra_engine(history_list)
+                if next_period_full != last_processed_period:
+                    last_processed_period = next_period_full
+                    pred, num_hint = generate_prediction(history)
 
                     active_prediction = {
-                        "period": upcoming_period,
-                        "prediction": prediction,
+                        "period": next_period_full,
+                        "prediction": pred
                     }
 
-                    send_live_prediction_signal(upcoming_period, prediction, engine_type, trend_tag)
-        except Exception as main_err:
-            print(f"Main Loop Recovered: {main_err}")
-            time.sleep(3)
+                    broadcast_prediction(next_period_short, pred, num_hint)
+        except Exception as e:
+            print(f"Loop Error: {e}")
 
         time.sleep(2)
 
@@ -210,11 +260,15 @@ if __name__ == "__main__":
     t = threading.Thread(target=run_flask)
     t.daemon = True
     t.start()
-    
+
+    t_bot = threading.Thread(target=bot_loop)
+    t_bot.daemon = True
+    t_bot.start()
+
     while True:
         try:
-            bot_main_loop()
-        except Exception as crash_err:
-            print(f"Auto Restarting Loop... Error: {crash_err}")
+            bot.polling(none_stop=True, interval=1, timeout=30)
+        except Exception as e:
+            print(f"Polling Error: {e}")
             time.sleep(5)
-            
+                                         
