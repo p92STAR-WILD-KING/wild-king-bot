@@ -7,16 +7,16 @@ from telebot import types
 from flask import Flask
 
 # ---------------- CONFIGURATION ----------------
-BOT_TOKEN = "8858083307:AAH0Wks0eHdmalUaZu1NmDd8qsTyE6u1d-Q"
+BOT_TOKEN = "8883836126:AAFFIuH5PI719_k_VkYbYy_mHaJWP2O12VA"
 REGISTER_LINK = "https://92blaze99.com/register?inviteCode=HD6Y3BN&from=web"
 API_URL = "https://sky-predictor-1012593186417.asia-southeast1.run.app/api/wingo-history-30s-100"
 
 # Card Banner Graphic Image URL
 BANNER_CARD_URL = "https://i.ibb.co/L8mN9v3/wingo-card.jpg"
 
-# Exact Telegram Animated Stickers (File IDs for Win / Loss)
-WIN_STICKER = "CAACAgIAAxkBAAEZ78pl3gAB1QAB..."   # Money Bag / Rich Animated Sticker ID
-LOSS_STICKER = "CAACAgIAAxkBAAEZ8E9l3gAB2QAB..."  # Loss / Virus Animated Sticker ID
+# Telegram Animated Stickers for Win / Loss
+WIN_STICKER = "CAACAgIAAxkBAAEZ78pl3gAB1QAB..."   
+LOSS_STICKER = "CAACAgIAAxkBAAEZ8E9l3gAB2QAB..."  
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
@@ -26,7 +26,7 @@ user_channels = {}
 last_processed_period = ""
 active_prediction = None
 
-# Stats tracking for live scorecard photo/message
+# Stats tracking
 total_signals = 0
 total_wins = 0
 total_losses = 0
@@ -138,7 +138,6 @@ def generate_prediction(history_list):
     num = int(latest.get("number", 0))
     sz = latest.get("size", "").upper() or ("BIG" if num >= 5 else "SMALL")
 
-    # Smart alternate prediction logic for high accuracy
     pred = "SMALL" if sz == "BIG" else "BIG"
     nums = "9/6" if pred == "BIG" else "1/3"
     return pred, nums
@@ -192,13 +191,10 @@ def check_and_send_result(history_list):
             )
             for target in targets:
                 try:
-                    # Send result text
                     bot.send_message(target, res_msg, parse_mode="Markdown")
-                    # Send animated win sticker
                     if WIN_STICKER:
                         bot.send_sticker(target, WIN_STICKER)
-                    # Send scoreboard summary photo/card like original bot
-                    bot.send_photo(target, BANNER_CARD_URL, caption=f"🏆 **WINDO SCOREBOARD UPDATE**\n✅ Streak Active! Win Rate: {win_rate}%")
+                    bot.send_photo(target, BANNER_CARD_URL, caption=f"🏆 **WINGO SCOREBOARD UPDATE**\n✅ Streak Active! Win Rate: {win_rate}%")
                 except Exception as e:
                     print(f"Win Result Send Error: {e}")
         else:
@@ -216,9 +212,7 @@ def check_and_send_result(history_list):
             )
             for target in targets:
                 try:
-                    # Send result text
-                    bot.send_message(target, res_msg, parse_model="Markdown" if hasattr(telebot, 'Markdown') else "Markdown")
-                    # Send animated loss sticker
+                    bot.send_message(target, res_msg, parse_mode="Markdown")
                     if LOSS_STICKER:
                         bot.send_sticker(target, LOSS_STICKER)
                 except Exception as e:
@@ -234,7 +228,7 @@ def bot_loop():
         try:
             history = get_live_data()
             if history:
-                check_and_sent_result = check_and_send_result(history)
+                check_and_send_result(history)
 
                 latest = history[0]
                 curr_issue = int(latest.get("issueNumber"))
@@ -271,4 +265,4 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"Polling Error: {e}")
             time.sleep(5)
-                                         
+                
