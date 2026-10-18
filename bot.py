@@ -11,30 +11,51 @@ CHAT_ID = "@pak92_qayoom"
 REGISTER_LINK = "https://92blaze99.com/register?inviteCode=HD6Y3BN&from=web"
 API_URL = "https://sky-predictor-1012593186417.asia-southeast1.run.app/api/wingo-history-30s-100"
 
+# TeleBot Object with Timeout Guard
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# Animated Win Sticker ID
 WIN_STICKER_ID = "CAACAgIAAxkBAAEZ78pl3gAB1QAB..."
 
 last_processed_period = ""
 active_prediction = None
 
-# --- Flask Server (Render Uptime Check) ---
+# --- Flask Web Server (For Uptime Monitoring) ---
 app = Flask(__name__)
 
 @app.route("/")
 @app.route("/health")
 def home():
-    return "WILD KING ADVANCED TREND BOT IS ONLINE!", 200
+    return "WILD KING ADVANCED BOT IS LIVE 24/7", 200
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
+# --- Safe Telegram Message Sender with Auto-Retry ---
+def safe_send_message(chat_id, text, parse_mode="Markdown", disable_web_page_preview=True):
+    for attempt in range(3):
+        try:
+            bot.send_message(chat_id, text, parse_mode=parse_mode, disable_web_page_preview=disable_web_page_preview, timeout=20)
+            return True
+        except Exception as e:
+            print(f"Telegram Send Attempt {attempt+1} Failed: {e}")
+            time.sleep(2)
+    return False
+
+def safe_send_sticker(chat_id, sticker_id):
+    for attempt in range(3):
+        try:
+            bot.send_sticker(chat_id, sticker_id, timeout=20)
+            return True
+        except Exception as e:
+            print(f"Telegram Sticker Attempt {attempt+1} Failed: {e}")
+            time.sleep(2)
+    return False
+
 # --- Fetch Live API Data ---
 def get_live_data():
     try:
-        response = requests.get(API_URL, timeout=8)
+        response = requests.get(API_URL, timeout=10)
         if response.status_code == 200:
             data = response.json()
             if data.get("code") == 0 and "data" in data and "list" in data["data"]:
@@ -116,7 +137,7 @@ def ultra_trend_engine(history_list):
 
     return final_prediction, engine_type, trend_tag
 
-# --- Send Live Prediction Signal ---
+# --- Send Live Signal ---
 def send_live_prediction_signal(period, prediction, engine_type, trend_tag):
     message = (
         f"👑 **WILD KING ADVANCED SIGNAL** 👑\n\n"
@@ -127,10 +148,7 @@ def send_live_prediction_signal(period, prediction, engine_type, trend_tag):
         f"🧠 **Engine:** `{engine_type}`\n\n"
         f"🔗 **Register & Play:** [Click Here to Join]({REGISTER_LINK})"
     )
-    try:
-        bot.send_message(CHAT_ID, message, parse_mode="Markdown", disable_web_page_preview=True)
-    except Exception as e:
-        print(f"Failed to post signal: {e}")
+    safe_send_message(CHAT_ID, message)
 
 # --- Result Tracker & Win Sticker ---
 def check_and_send_result(history_list):
@@ -155,24 +173,18 @@ def check_and_send_result(history_list):
                 f"🎯 **Outcome:** `{actual_size}` (Matched)\n\n"
                 f"🔥 *WILD KING ADVANCED ACCURACY PASSED!*"
             )
-            try:
-                bot.send_message(CHAT_ID, result_text, parse_mode="Markdown")
-                try:
-                    bot.send_sticker(CHAT_ID, WIN_STICKER_ID)
-                except Exception:
-                    bot.send_message(CHAT_ID, "🎯🎯 WINNER WINNER! STREAK ACTIVE! 🏆✨")
-            except Exception as e:
-                print(f"Error sending win update: {e}")
+            sent = safe_send_message(CHAT_ID, result_text)
+            if sent:
+                sticker_sent = safe_send_sticker(CHAT_ID, WIN_STICKER_ID)
+                if not sticker_sent:
+                    safe_send_message(CHAT_ID, "🎯🎯 WINNER WINNER! STREAK ACTIVE! 🏆✨")
         else:
             result_text = (
                 f"❌ **RESULT: LOSS ⚠️**\n"
                 f"📌 **Period:** `{latest_period}`\n"
                 f"📊 **Actual:** `{actual_size}` | **Predicted:** `{predicted}`"
             )
-            try:
-                bot.send_message(CHAT_ID, result_text, parse_mode="Markdown")
-            except Exception as e:
-                print(f"Error sending loss update: {e}")
+            safe_send_message(CHAT_ID, result_text)
 
         active_prediction = None
 
@@ -202,22 +214,20 @@ def bot_main_loop():
 
                     send_live_prediction_signal(upcoming_period, prediction, engine_type, trend_tag)
         except Exception as main_err:
-            print(f"Main Loop Error: {main_err}")
+            print(f"Main Loop Recovered: {main_err}")
             time.sleep(3)
 
         time.sleep(2)
 
 if __name__ == "__main__":
-    # Start Flask Server in background thread
     t = threading.Thread(target=run_flask)
     t.daemon = True
     t.start()
     
-    # Auto-Restart Guard
     while True:
         try:
             bot_main_loop()
         except Exception as crash_err:
-            print(f"Bot Crashed, Restarting... Error: {crash_err}")
+            print(f"Auto Restarting Loop... Error: {crash_err}")
             time.sleep(5)
-            
+    
