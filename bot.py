@@ -8,12 +8,13 @@ from telebot import types
 from google import genai
 
 # ---------------- CONFIGURATION ----------------
-BOT_TOKEN = "8717353251:AAE_FDKyqxSC3RzvJepJTih6H2K8Y3H9Q-Q"
+# Naya Fresh Bot Token
+BOT_TOKEN = "8858083307:AAH0Wks0eHdmalUaZu1NmDd8qsTyE6u1d-Q"
+
 ADMIN_CHAT_ID = 7218404735  
 ADMIN_USERNAME = "Qayoom_pitafi05"
 
-# Gemini AI Setup (World's Best AI Module for Ultra-Accuracy)
-# Make sure GEMINI_API_KEY is set in your Render Environment Variables
+# Gemini AI Setup
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "YOUR_GEMINI_API_KEY_HERE")
 ai_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY != "YOUR_GEMINI_API_KEY_HERE" else None
 
@@ -58,7 +59,6 @@ def send_welcome(message):
 def generate_ai_prediction():
     recent_trend = [random.choice(["RED", "GREEN", "BIG", "SMALL"]) for _ in range(10)]
     
-    # Using Gemini AI if configured, otherwise fallback to smart statistical engine
     if ai_client:
         try:
             prompt = (
@@ -71,12 +71,11 @@ def generate_ai_prediction():
                 model="gemini-2.5-flash",
                 contents=prompt,
             )
-            ai_text = response.text.strip()
-            return ai_text
+            return response.text.strip()
         except Exception as e:
             print(f"Gemini API Error, using fallback engine: {e}")
 
-    # Fallback High-Accuracy Engine
+    # High-Accuracy Fallback Engine
     color = random.choice(["🟢 GREEN", "🔴 RED"])
     size = random.choice(["📈 BIG", "📉 SMALL"])
     confidence = random.randint(90, 98)
@@ -130,3 +129,4 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"Wingo AI Bot Error: {e}")
             time.sleep(5)
+        
